@@ -9,6 +9,13 @@ Critical guardrail: if patientId is absent or empty after extraction, this
 function returns LlmResponse directly. The LLM never runs. This is code-level
 enforcement — an instruction-based guard can be ignored by the model; this cannot.
 
+Patient ID injection: when patientId is present, it is prepended to the system
+instruction in the LlmRequest directly. The instruction template cannot use a
+{patient_id} placeholder because ADK renders template variables during preprocessing
+— before this callback runs — which raises KeyError when patient_id is not yet in
+session state. Injecting via llm_request.config.system_instruction is the correct
+ADK-documented pattern for dynamic instruction modification at callback time.
+
 Metadata key convention (must match PO_FHIR_EXTENSION_URI in config.py):
     "https://app.promptopinion.ai/schemas/a2a/v1/fhir-context": {
         "fhirUrl":   "https://...",
@@ -17,7 +24,7 @@ Metadata key convention (must match PO_FHIR_EXTENSION_URI in config.py):
     }
 
 Set LOG_HOOK_RAW_OBJECTS=true in .env to dump raw ADK objects during integration
-testing. Remove or set to false before production.
+testing. Set to false before production.
 """
 import json
 import logging
@@ -42,12 +49,7 @@ def _safe_correlation_ids(
     callback_context: CallbackContext,
     llm_request: LlmRequest,
 ) -> dict[str, str | None]:
-    """
-    Extract correlation IDs from ADK objects for structured log lines.
-
-    ADK may surface these on either object depending on the transport path —
-    check both and take the first non-empty value.
-    """
+    """Extract correlation IDs from ADK objects for structured log lines."""
     def _first(*values):
         return next((v for v in values if v not in (None, "")), None)
 
@@ -76,7 +78,7 @@ def _extract_metadata(
 
     ADK surfaces A2A metadata differently depending on whether the request
     arrived via message/send or message/stream. Checking all known locations
-    ensures we find it regardless of transport path — no external bridge needed.
+    ensures we find it regardless of transport path.
     """
     candidates = [
         getattr(callback_context, "metadata", None),
@@ -104,6 +106,40 @@ def _coerce_fhir_data(value) -> dict | None:
         except json.JSONDecodeError:
             return None
     return None
+
+
+def _inject_patient_context(llm_request: LlmRequest, patient_id: str) -> None:
+    """
+    Prepend patient ID context to the system instruction in the LlmRequest.
+
+    Called after patient_id is confirmed non-empty. Always outputs a plain
+    string to system_instruction regardless of the incoming type (str, Content,
+    or None), which ADK handles correctly.
+    """
+    if llm_request.config is None:
+        logger.warning("hook_inject_skipped llm_request.config is None")
+        return
+
+    patient_header = (
+        f"CURRENT PATIENT ID: {patient_id}\n"
+        f"Always pass this exact value as the patientId argument to "
+        f"every clinical tool that requires it.\n\n"
+    )
+
+    si = llm_request.config.system_instruction
+    if si is None:
+        existing = ""
+    elif isinstance(si, str):
+        existing = si
+    elif hasattr(si, "parts"):
+        existing = "".join(
+            p.text for p in si.parts if getattr(p, "text", None)
+        )
+    else:
+        existing = str(si)
+
+    llm_request.config.system_instruction = patient_header + existing
+    logger.info("hook_patient_context_injected patient_id=%s", patient_id)
 
 
 # ── Public callback ────────────────────────────────────────────────────────────
@@ -227,6 +263,9 @@ def extract_fhir_context(
                 ))],
             )
         )
+
+    # Patient ID confirmed — inject into system instruction before model call.
+    _inject_patient_context(llm_request, patient_id)
 
     logger.info(
         "hook_patient_id_resolved task_id=%s context_id=%s message_id=%s patient_id=%s",

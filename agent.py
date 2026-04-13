@@ -1,13 +1,15 @@
 """
 ADK Agent definition.
 
-The {patient_id} placeholder in the instruction is rendered from session state
-by ADK before each model call and injected into the system instruction field —
-separate from conversation history. The patient ID appears in the system prompt,
-not in the chat thread.
+Patient ID is injected into the LlmRequest system instruction at runtime
+by extract_fhir_context (before_model_callback) — not via template placeholder.
+This avoids ADK raising KeyError when patient_id is not yet in session state
+during preprocessing, which runs before the callback.
 
-before_model_callback=extract_fhir_context ensures the patient ID is resolved
-(or the LLM call is blocked) before the instruction template is rendered.
+before_model_callback=extract_fhir_context ensures:
+  - Patient ID is extracted from A2A metadata and stored in session state
+  - Patient context is prepended to the system instruction in the LlmRequest
+  - If patient ID is missing, LlmResponse is returned directly — LLM never runs
 """
 import logging
 
@@ -32,10 +34,6 @@ root_agent = Agent(
     instruction="""\
 You are Aivara, a clinical intelligence agent with read-only access to a patient's \
 FHIR health record through a set of clinical data tools.
-
-CURRENT PATIENT CONTEXT
-Patient ID: {patient_id}
-Always pass this exact value as the patientId argument to every clinical tool that requires it.
 
 CORE BEHAVIOUR RULES
 1. Always fetch data using the available tools before reasoning or concluding. \
