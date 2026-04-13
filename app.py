@@ -8,7 +8,7 @@ Import order is deliberate:
   4. Everything else
 
 The agent card is served publicly at GET /.well-known/agent-card.json.
-All other endpoints require X-API-Key, enforced by to_a2a(api_key=...).
+All other endpoints require X-API-Key, enforced by ApiKeyMiddleware.
 """
 import logging
 import os
@@ -48,6 +48,7 @@ from a2a.types import (
 from google.adk.a2a.utils.agent_to_a2a import to_a2a
 
 from agent import root_agent
+from middleware import ApiKeyMiddleware
 
 # ── Agent skills ───────────────────────────────────────────────────────────────
 
@@ -118,6 +119,8 @@ agent_card = AgentCard(
     ),
     url=AIVARA_AGENT_URL,
     version="1.0.0",
+    defaultInputModes=["text/plain"],
+    defaultOutputModes=["text/plain"],
     capabilities=AgentCapabilities(
         streaming=False,
         push_notifications=False,
@@ -141,14 +144,15 @@ agent_card = AgentCard(
 )
 
 # ── A2A application ────────────────────────────────────────────────────────────
-# to_a2a() attaches X-API-Key enforcement middleware internally.
-# The agent card endpoint (/.well-known/agent-card.json) is kept public by the SDK.
+# to_a2a() does not accept api_key — ApiKeyMiddleware is attached manually.
+# Starlette builds the middleware stack lazily on the first request, so
+# add_middleware() called here (at import time) is safe before uvicorn starts.
 
 a2a_app = to_a2a(
     agent=root_agent,
     agent_card=agent_card,
-    api_key=AIVARA_AGENT_API_KEY,
 )
+a2a_app.add_middleware(ApiKeyMiddleware)
 
 logger.info(
     "aivara_agent_startup log_level=%s url=%s",
