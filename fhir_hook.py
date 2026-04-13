@@ -76,12 +76,23 @@ def _extract_metadata(
     """
     Walk all known ADK metadata locations in priority order.
 
-    ADK surfaces A2A metadata differently depending on whether the request
-    arrived via message/send or message/stream. Checking all known locations
-    ensures we find it regardless of transport path.
+    ADK surfaces A2A metadata in different locations depending on transport path:
+    - callback_context.metadata — direct metadata
+    - callback_context.run_config.custom_metadata["a2a_metadata"] — where ADK
+      stores bridged params.metadata from A2A requests
+    - llm_request.metadata — fallback
     """
+    run_config = getattr(callback_context, "run_config", None)
+    custom_metadata = getattr(run_config, "custom_metadata", None) if run_config else None
+    a2a_metadata = (
+        custom_metadata.get("a2a_metadata")
+        if isinstance(custom_metadata, dict)
+        else None
+    )
+
     candidates = [
         getattr(callback_context, "metadata", None),
+        a2a_metadata,
         getattr(llm_request, "metadata", None),
     ]
     for candidate in candidates:
