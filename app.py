@@ -123,20 +123,23 @@ agent_card = AgentCard(
     defaultOutputModes=["text/plain"],
     capabilities=AgentCapabilities(
         streaming=False,
-        push_notifications=False,
+        pushNotifications=False,
+        extensions=[
+            AgentExtension(
+                uri=PO_FHIR_EXTENSION_URI,
+                description="FHIR R4 context — patient ID, FHIR URL, and access token.",
+                required=True,
+            )
+        ],
     ),
     skills=skills,
-    extensions=[
-        AgentExtension(
-            uri=PO_FHIR_EXTENSION_URI,
-            required=True,
-        )
-    ],
-    security_schemes={
+    securitySchemes={
         "apiKey": SecurityScheme(
-            api_key=APIKeySecurityScheme(
+            root=APIKeySecurityScheme(
+                type="apiKey",
                 name="X-API-Key",
                 in_=In.header,
+                description="API key required to access this agent.",
             )
         )
     },
