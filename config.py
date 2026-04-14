@@ -36,9 +36,8 @@ def _setup_vertex_credentials() -> None:
 
     creds_path = "/tmp/google-creds.json"
 
-    # Railway sometimes wraps env var values in surrounding double-quotes.
     # Extract the raw JSON object by finding the outermost { } braces —
-    # this is robust against any quoting Railway applies.
+    # strips any surrounding quotes Railway adds when storing the value.
     start = sa_json.find("{")
     end = sa_json.rfind("}")
     if start == -1 or end == -1 or end <= start:
@@ -48,13 +47,14 @@ def _setup_vertex_credentials() -> None:
         )
     sa_json = sa_json[start : end + 1]
 
+    # strict=False allows control characters (e.g. actual newlines) in string
+    # values — Railway converts \n escape sequences to real newlines when storing
+    # env vars, which standard json.loads() rejects.
     try:
-        creds = _json.loads(sa_json)
+        creds = _json.JSONDecoder(strict=False).decode(sa_json)
     except _json.JSONDecodeError as e:
         raise ValueError(
-            f"SERVICE_ACCOUNT_JSON is not valid JSON after extraction: {e}. "
-            "Re-run: python -c \"import json; print(json.dumps(json.load(open('keyfile.json'))))\" | clip "
-            "and paste the clipboard output directly into the Railway variable."
+            f"SERVICE_ACCOUNT_JSON is not valid JSON: {e}."
         ) from e
 
     with open(creds_path, "w") as f:
