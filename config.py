@@ -14,7 +14,7 @@ load_dotenv()
 
 # ── Model & MCP ───────────────────────────────────────────────────────────────
 
-GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
+GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 AIVARA_MCP_URL: str = os.getenv(
     "AIVARA_MCP_URL",
