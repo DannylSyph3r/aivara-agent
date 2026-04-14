@@ -49,23 +49,16 @@ def _safe_correlation_ids(
     callback_context: CallbackContext,
     llm_request: LlmRequest,
 ) -> dict[str, str | None]:
-    """Extract correlation IDs from ADK objects for structured log lines."""
-    def _first(*values):
-        return next((v for v in values if v not in (None, "")), None)
+    """Extract stable correlation identifiers from ADK context objects.
 
+    ADK does not expose A2A task_id / context_id / message_id on its callback
+    objects — those live at the A2A layer above. invocation_id is the correct
+    ADK-native identifier: stable across all before_model_callback calls within
+    a single user message turn, and unique per invocation.
+    """
     return {
-        "task_id": _first(
-            getattr(llm_request, "task_id", None),
-            getattr(callback_context, "task_id", None),
-        ),
-        "context_id": _first(
-            getattr(llm_request, "context_id", None),
-            getattr(callback_context, "context_id", None),
-        ),
-        "message_id": _first(
-            getattr(llm_request, "message_id", None),
-            getattr(callback_context, "message_id", None),
-        ),
+        "invocation_id": getattr(callback_context, "invocation_id", None),
+        "agent_name":    getattr(callback_context, "agent_name",    None),
     }
 
 
@@ -180,9 +173,9 @@ def extract_fhir_context(
             safe_pretty_json(dir(llm_request)),
         )
         logger.info(
-            "hook_raw_callback_context task_id=%s context_id=%s metadata=%s state=%s",
-            getattr(callback_context, "task_id", None),
-            getattr(callback_context, "context_id", None),
+            "hook_raw_callback_context invocation_id=%s agent=%s metadata=%s state=%s",
+            correlation["invocation_id"],
+            correlation["agent_name"],
             safe_pretty_json(str(getattr(callback_context, "metadata", None))),
             safe_pretty_json(str(getattr(callback_context, "state", None))),
         )
@@ -191,33 +184,29 @@ def extract_fhir_context(
     metadata_keys = list(metadata.keys())
 
     logger.info(
-        "hook_called_enter task_id=%s context_id=%s message_id=%s metadata_keys=%s",
-        correlation["task_id"],
-        correlation["context_id"],
-        correlation["message_id"],
+        "hook_called_enter invocation_id=%s agent=%s metadata_keys=%s",
+        correlation["invocation_id"],
+        correlation["agent_name"],
         metadata_keys,
     )
 
     if not metadata:
         logger.info(
-            "hook_called_no_metadata task_id=%s context_id=%s message_id=%s",
-            correlation["task_id"],
-            correlation["context_id"],
-            correlation["message_id"],
+            "hook_called_no_metadata invocation_id=%s agent=%s",
+            correlation["invocation_id"],
+            correlation["agent_name"],
         )
 
-    # Locate the FHIR entry by substring match so the full URI variant doesn't matter.
     fhir_data = None
     for key, value in metadata.items():
         if FHIR_CONTEXT_KEY in str(key):
             fhir_data = _coerce_fhir_data(value)
             if fhir_data is None:
                 logger.warning(
-                    "hook_called_fhir_malformed task_id=%s context_id=%s message_id=%s "
+                    "hook_called_fhir_malformed invocation_id=%s agent=%s "
                     "metadata_key=%s value_type=%s",
-                    correlation["task_id"],
-                    correlation["context_id"],
-                    correlation["message_id"],
+                    correlation["invocation_id"],
+                    correlation["agent_name"],
                     key,
                     type(value).__name__,
                 )
@@ -233,11 +222,10 @@ def extract_fhir_context(
         callback_context.state["patient_id"] = patient_id
 
         logger.info(
-            "hook_called_fhir_found task_id=%s context_id=%s message_id=%s "
+            "hook_called_fhir_found invocation_id=%s agent=%s "
             "patient_id=%s fhir_url_set=%s fhir_token=%s",
-            correlation["task_id"],
-            correlation["context_id"],
-            correlation["message_id"],
+            correlation["invocation_id"],
+            correlation["agent_name"],
             patient_id or "[EMPTY]",
             bool(fhir_url),
             token_fingerprint(fhir_token),
@@ -247,11 +235,9 @@ def extract_fhir_context(
         callback_context.state["fhir_token"] = ""
         callback_context.state["patient_id"] = ""
         logger.info(
-            "hook_called_fhir_not_found task_id=%s context_id=%s message_id=%s "
-            "metadata_keys=%s",
-            correlation["task_id"],
-            correlation["context_id"],
-            correlation["message_id"],
+            "hook_called_fhir_not_found invocation_id=%s agent=%s metadata_keys=%s",
+            correlation["invocation_id"],
+            correlation["agent_name"],
             metadata_keys,
         )
 
@@ -259,11 +245,10 @@ def extract_fhir_context(
 
     if not patient_id:
         logger.warning(
-            "hook_patient_id_missing task_id=%s context_id=%s message_id=%s "
+            "hook_patient_id_missing invocation_id=%s agent=%s "
             "— skipping LLM to prevent hallucination",
-            correlation["task_id"],
-            correlation["context_id"],
-            correlation["message_id"],
+            correlation["invocation_id"],
+            correlation["agent_name"],
         )
         return LlmResponse(
             content=types.Content(
@@ -279,10 +264,9 @@ def extract_fhir_context(
     _inject_patient_context(llm_request, patient_id)
 
     logger.info(
-        "hook_patient_id_resolved task_id=%s context_id=%s message_id=%s patient_id=%s",
-        correlation["task_id"],
-        correlation["context_id"],
-        correlation["message_id"],
+        "hook_patient_id_resolved invocation_id=%s agent=%s patient_id=%s",
+        correlation["invocation_id"],
+        correlation["agent_name"],
         patient_id,
     )
     return None

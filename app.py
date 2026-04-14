@@ -10,6 +10,7 @@ Import order is deliberate:
 The agent card is served publicly at GET /.well-known/agent-card.json.
 All other endpoints require X-API-Key, enforced by ApiKeyMiddleware.
 """
+import json
 import logging
 import os
 
@@ -46,9 +47,72 @@ from a2a.types import (
     SecurityScheme,
 )
 from google.adk.a2a.utils.agent_to_a2a import to_a2a
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 
 from agent import root_agent
 from middleware import ApiKeyMiddleware
+
+# ── Error middleware ───────────────────────────────────────────────────────────
+
+class FriendlyErrorMiddleware(BaseHTTPMiddleware):
+    """
+    Intercepts A2A JSON responses containing Gemini 503 errors and rewrites
+    the error text with a user-friendly message before it reaches the caller.
+
+    Transparent on any failure — if the response body cannot be parsed as JSON
+    the original body is returned unchanged. Never raises.
+
+    Only active for POST requests; GET requests (agent card) pass straight through.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+
+        if request.method != "POST":
+            return response
+
+        body = b""
+        try:
+            async for chunk in response.body_iterator:
+                body += chunk
+
+            payload = json.loads(body)
+            result = payload.get("result", {})
+
+            for key in ("error", "message", "text"):
+                val = str(result.get(key, ""))
+                if "503" in val or "UNAVAILABLE" in val or "high demand" in val:
+                    result[key] = (
+                        "The AI model is temporarily busy. "
+                        "Please try again in a few seconds."
+                    )
+                    payload["result"] = result
+                    break
+
+            # Strip stale Content-Length — Starlette sets the correct value
+            # from the actual content we return.
+            headers = {
+                k: v for k, v in response.headers.items()
+                if k.lower() != "content-length"
+            }
+
+            return Response(
+                content=json.dumps(payload),
+                status_code=response.status_code,
+                headers=headers,
+                media_type="application/json",
+            )
+
+        except Exception:
+            # Body is not JSON or an unexpected error occurred.
+            # Return whatever we buffered so nothing is swallowed.
+            return Response(
+                content=body,
+                status_code=response.status_code,
+                headers=dict(response.headers),
+            )
 
 # ── Agent skills ───────────────────────────────────────────────────────────────
 
@@ -156,6 +220,7 @@ a2a_app = to_a2a(
     agent_card=agent_card,
 )
 a2a_app.add_middleware(ApiKeyMiddleware)
+a2a_app.add_middleware(FriendlyErrorMiddleware)
 
 logger.info(
     "aivara_agent_startup log_level=%s url=%s",
