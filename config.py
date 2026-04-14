@@ -46,7 +46,7 @@ _USE_VERTEX: bool = os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() == "
 
 # ── Model & MCP ───────────────────────────────────────────────────────────────
 
-GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.1-flash")
+GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
 
 AIVARA_MCP_URL: str = os.getenv(
     "AIVARA_MCP_URL",
