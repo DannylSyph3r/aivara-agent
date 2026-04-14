@@ -28,12 +28,30 @@ load_dotenv()
 # it automatically. No-ops if SERVICE_ACCOUNT_JSON is not set.
 
 def _setup_vertex_credentials() -> None:
-    sa_json = os.getenv("SERVICE_ACCOUNT_JSON")
+    import json as _json
+
+    sa_json = os.getenv("SERVICE_ACCOUNT_JSON", "").strip()
     if not sa_json:
         return
+
     creds_path = "/tmp/google-creds.json"
+
+    # Parse then re-dump — guarantees a clean valid JSON file regardless of
+    # any quoting or escaping Railway applies to the stored variable value.
+    try:
+        creds = _json.loads(sa_json)
+        # Handle Railway wrapping the value in an extra layer of quotes
+        if isinstance(creds, str):
+            creds = _json.loads(creds)
+    except _json.JSONDecodeError as e:
+        raise ValueError(
+            f"SERVICE_ACCOUNT_JSON is not valid JSON: {e}. "
+            "Ensure the variable contains the raw minified JSON key file contents."
+        ) from e
+
     with open(creds_path, "w") as f:
-        f.write(sa_json)
+        _json.dump(creds, f)
+
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
 
 
