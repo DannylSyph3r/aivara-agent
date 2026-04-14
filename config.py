@@ -36,17 +36,25 @@ def _setup_vertex_credentials() -> None:
 
     creds_path = "/tmp/google-creds.json"
 
-    # Parse then re-dump — guarantees a clean valid JSON file regardless of
-    # any quoting or escaping Railway applies to the stored variable value.
+    # Railway sometimes wraps env var values in surrounding double-quotes.
+    # Extract the raw JSON object by finding the outermost { } braces —
+    # this is robust against any quoting Railway applies.
+    start = sa_json.find("{")
+    end = sa_json.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError(
+            "SERVICE_ACCOUNT_JSON does not contain a JSON object. "
+            "Ensure the variable contains the raw minified JSON key file contents."
+        )
+    sa_json = sa_json[start : end + 1]
+
     try:
         creds = _json.loads(sa_json)
-        # Handle Railway wrapping the value in an extra layer of quotes
-        if isinstance(creds, str):
-            creds = _json.loads(creds)
     except _json.JSONDecodeError as e:
         raise ValueError(
-            f"SERVICE_ACCOUNT_JSON is not valid JSON: {e}. "
-            "Ensure the variable contains the raw minified JSON key file contents."
+            f"SERVICE_ACCOUNT_JSON is not valid JSON after extraction: {e}. "
+            "Re-run: python -c \"import json; print(json.dumps(json.load(open('keyfile.json'))))\" | clip "
+            "and paste the clipboard output directly into the Railway variable."
         ) from e
 
     with open(creds_path, "w") as f:
