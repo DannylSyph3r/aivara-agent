@@ -70,15 +70,9 @@ _setup_vertex_credentials()
 
 _USE_VERTEX: bool = os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() == "true"
 
-# ── Model & MCP ───────────────────────────────────────────────────────────────
+# ── Model ─────────────────────────────────────────────────────────────────────
 
 GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
-
-AIVARA_MCP_URL: str = os.getenv(
-    "AIVARA_MCP_URL",
-    "https://aivara-tools.up.railway.app/mcp",
-)
-AIVARA_MCP_API_KEY: str = os.getenv("AIVARA_MCP_API_KEY", "")
 
 # ── Vertex AI project ──────────────────────────────────────────────────────────
 
@@ -108,7 +102,7 @@ def validate_config() -> None:
 
     Vertex AI mode requires GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION.
     AI Studio mode requires GOOGLE_API_KEY.
-    Both modes require AIVARA_MCP_API_KEY and AIVARA_AGENT_API_KEY.
+    Both modes require AIVARA_AGENT_API_KEY.
 
     Called once in app.py after load_dotenv() — never at import time of this module.
     """
@@ -116,13 +110,11 @@ def validate_config() -> None:
         required = [
             "GOOGLE_CLOUD_PROJECT",
             "GOOGLE_CLOUD_LOCATION",
-            "AIVARA_MCP_API_KEY",
             "AIVARA_AGENT_API_KEY",
         ]
     else:
         required = [
             "GOOGLE_API_KEY",
-            "AIVARA_MCP_API_KEY",
             "AIVARA_AGENT_API_KEY",
         ]
 

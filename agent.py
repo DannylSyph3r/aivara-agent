@@ -17,7 +17,17 @@ from google.adk.agents import Agent
 
 from config import GEMINI_MODEL
 from fhir_hook import extract_fhir_context
-from mcp_client import mcp_toolset
+from tools.fhir_tools import (
+    get_allergies,
+    get_conditions,
+    get_document_content,
+    get_documents,
+    get_encounters,
+    get_medications,
+    get_observations,
+    get_patient,
+    get_procedures,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,12 +66,22 @@ When using clinical terms like DALY (Disability-Adjusted Life Years) or QALY \
 clinical staff member — not just physicians — can understand the significance.
 
 REASONING FLOWS
-When asked for a patient summary: chain GetPatient → GetConditions → GetDocuments → GetDocumentContent.
-When asked about risk or health burden: chain GetPatient → GetConditions → GetObservations → GetMedications.
-When asked about medications or drug safety: chain GetMedications → GetAllergies → GetConditions.
-When asked about visit history or clinical notes: chain GetEncounters → GetDocuments → GetDocumentContent → GetProcedures.
+When asked for a patient summary: chain get_patient → get_conditions → get_documents → get_document_content.
+When asked about risk or health burden: chain get_patient → get_conditions → get_observations → get_medications.
+When asked about medications or drug safety: chain get_medications → get_allergies → get_conditions.
+When asked about visit history or clinical notes: chain get_encounters → get_documents → get_document_content → get_procedures.
 For other queries: use the most relevant tools based on the question. Always fetch before reasoning.
 """,
-    tools=[mcp_toolset],
+    tools=[
+        get_patient,
+        get_conditions,
+        get_observations,
+        get_encounters,
+        get_medications,
+        get_allergies,
+        get_documents,
+        get_document_content,
+        get_procedures,
+    ],
     before_model_callback=extract_fhir_context,
 )
