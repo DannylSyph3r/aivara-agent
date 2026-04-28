@@ -114,6 +114,20 @@ class FriendlyErrorMiddleware(BaseHTTPMiddleware):
                 headers=dict(response.headers),
             )
 
+from typing import Any
+from pydantic import Field
+
+# ── AgentCardV1 ────────────────────────────────────────────────────────────────
+
+class AgentCardV1(AgentCard):
+    """
+    AgentCard subclass that adds supportedInterfaces as an explicit Pydantic field.
+    The installed a2a-sdk 0.3.x does not define this field — without declaring it
+    here it is silently dropped during JSON serialisation.
+    Remove this subclass once a2a-sdk ships native A2A v1 support.
+    """
+    supportedInterfaces: list[dict[str, Any]] = Field(default_factory=list)
+
 # ── Agent skills ───────────────────────────────────────────────────────────────
 
 skills = [
@@ -173,7 +187,7 @@ skills = [
 
 # ── Agent card ─────────────────────────────────────────────────────────────────
 
-agent_card = AgentCard(
+agent_card = AgentCardV1(
     name="Aivara",
     description=(
         "Aivara is a clinical intelligence agent that reasons across a patient's "
@@ -196,6 +210,13 @@ agent_card = AgentCard(
             )
         ],
     ),
+    supportedInterfaces=[
+        {
+            "url": AIVARA_AGENT_URL,
+            "protocolBinding": "JSONRPC",
+            "protocolVersion": "1.0",
+        }
+    ],
     skills=skills,
     securitySchemes={
         "apiKey": SecurityScheme(
