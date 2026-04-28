@@ -42,7 +42,6 @@ def _get_fhir_context(tool_context: ToolContext):
     missing = [
         name for name, val in [
             ("fhir_url",   fhir_url),
-            ("fhir_token", fhir_token),
             ("patient_id", patient_id),
         ]
         if not val
@@ -60,13 +59,13 @@ def _get_fhir_context(tool_context: ToolContext):
 
 def _fhir_get(fhir_url: str, token: str, path: str, params: dict | None = None) -> dict:
     """Authenticated FHIR GET — returns parsed JSON."""
+    headers = {"Accept": "application/fhir+json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     response = httpx.get(
         f"{fhir_url}/{path}",
         params=params,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept":        "application/fhir+json",
-        },
+        headers=headers,
         timeout=_FHIR_TIMEOUT,
     )
     response.raise_for_status()
