@@ -42,9 +42,6 @@ from a2a.types import (
     AgentCard,
     AgentExtension,
     AgentSkill,
-    APIKeySecurityScheme,
-    In,
-    SecurityScheme,
 )
 from google.adk.a2a.utils.agent_to_a2a import to_a2a
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -121,12 +118,19 @@ from pydantic import Field
 
 class AgentCardV1(AgentCard):
     """
-    AgentCard subclass that adds supportedInterfaces as an explicit Pydantic field.
-    The installed a2a-sdk 0.3.x does not define this field — without declaring it
-    here it is silently dropped during JSON serialisation.
-    Remove this subclass once a2a-sdk ships native A2A v1 support.
+    AgentCard subclass that patches two fields missing/changed in A2A v1.
+
+    1. supportedInterfaces — not defined in installed a2a-sdk; added here so
+       it is included in the serialised JSON.
+    2. securitySchemes — parent types this as dict[str, SecurityScheme] which
+       forces the OLD flat format (type/name/in). PO v1 expects the NEW nested
+       format (apiKeySecurityScheme/...). Overriding to dict[str, Any] lets the
+       v1-format dict pass through unmodified.
+
+    Both overrides can be removed once a2a-sdk ships native A2A v1 support.
     """
     supportedInterfaces: list[dict[str, Any]] = Field(default_factory=list)
+    securitySchemes: dict[str, Any] | None = None  # override parent's typed field
 
 # ── Agent skills ───────────────────────────────────────────────────────────────
 
@@ -219,14 +223,13 @@ agent_card = AgentCardV1(
     ],
     skills=skills,
     securitySchemes={
-        "apiKey": SecurityScheme(
-            root=APIKeySecurityScheme(
-                type="apiKey",
-                name="X-API-Key",
-                in_=In.header,
-                description="API key required to access this agent.",
-            )
-        )
+        "apiKey": {
+            "apiKeySecurityScheme": {
+                "name": "X-API-Key",
+                "location": "header",
+                "description": "API key required to access this agent.",
+            }
+        }
     },
     security=[{"apiKey": []}],
 )
