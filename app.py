@@ -111,6 +111,142 @@ class FriendlyErrorMiddleware(BaseHTTPMiddleware):
                 headers=dict(response.headers),
             )
 
+# ── PO compatibility middleware ────────────────────────────────────────────────
+
+class PoCompatibilityMiddleware(BaseHTTPMiddleware):
+    """
+    Bridges remaining incompatibilities between PO's A2A v1 client and the
+    installed a2a-sdk 0.3.x stack.
+
+    Note: FHIR metadata bridging (params.message.metadata → params.metadata)
+    is already handled upstream by ApiKeyMiddleware. Not duplicated here.
+
+    Inbound transforms:
+      1. Method rewriting   — SendMessage → message/send (confirmed via Postman)
+      2. Role normalisation — ROLE_USER → user, ROLE_AGENT → agent
+
+    Outbound transforms:
+      3. Response reshaping — wraps result in {"task": {...}} with proto enum
+         states and strips "kind" fields from artifact parts (PO A2A v1 format)
+    """
+
+    _METHOD_ALIASES: dict[str, str] = {
+        "SendMessage":          "message/send",
+        "SendStreamingMessage": "message/send",
+        "GetTask":              "tasks/get",
+        "CancelTask":           "tasks/cancel",
+        "TaskResubscribe":      "tasks/resubscribe",
+    }
+    _ROLE_ALIASES: dict[str, str] = {
+        "ROLE_USER":  "user",
+        "ROLE_AGENT": "agent",
+    }
+    _STATE_MAP: dict[str, str] = {
+        "completed":      "TASK_STATE_COMPLETED",
+        "working":        "TASK_STATE_WORKING",
+        "submitted":      "TASK_STATE_SUBMITTED",
+        "input-required": "TASK_STATE_INPUT_REQUIRED",
+        "failed":         "TASK_STATE_FAILED",
+        "canceled":       "TASK_STATE_CANCELED",
+    }
+
+    async def dispatch(self, request: Request, call_next):
+        if request.method != "POST":
+            return await call_next(request)
+
+        body_bytes = await request.body()
+        body_dirty = False
+        parsed: dict = {}
+        try:
+            parsed = json.loads(body_bytes) if body_bytes else {}
+        except json.JSONDecodeError:
+            parsed = {}
+
+        # 1. Method rewriting
+        if isinstance(parsed, dict) and parsed.get("method") in self._METHOD_ALIASES:
+            original = parsed["method"]
+            parsed["method"] = self._METHOD_ALIASES[original]
+            body_dirty = True
+            logger.info(
+                "jsonrpc_method_rewritten original=%s rewritten=%s",
+                original, parsed["method"],
+            )
+
+        # 2. Role normalisation
+        def _fix_roles(node):
+            if isinstance(node, dict):
+                if "role" in node and node["role"] in self._ROLE_ALIASES:
+                    node["role"] = self._ROLE_ALIASES[node["role"]]
+                for v in node.values():
+                    _fix_roles(v)
+            elif isinstance(node, list):
+                for item in node:
+                    _fix_roles(item)
+
+        if isinstance(parsed, dict):
+            snapshot = json.dumps(parsed, sort_keys=True)
+            _fix_roles(parsed)
+            if json.dumps(parsed, sort_keys=True) != snapshot:
+                body_dirty = True
+                logger.info("jsonrpc_roles_normalised")
+
+        if body_dirty:
+            body_bytes = json.dumps(parsed, ensure_ascii=False).encode("utf-8")
+            request._body = body_bytes
+
+        response = await call_next(request)
+
+        # 3. Response reshaping — only applies to JSON responses
+        content_type = response.headers.get("content-type", "")
+        if "application/json" not in content_type:
+            return response
+
+        resp_body = b""
+        try:
+            async for chunk in response.body_iterator:
+                resp_body += chunk if isinstance(chunk, bytes) else chunk.encode()
+
+            resp_parsed = json.loads(resp_body)
+            result = resp_parsed.get("result") if isinstance(resp_parsed, dict) else None
+
+            if isinstance(result, dict) and result.get("kind") == "task":
+                task: dict = {
+                    "id":        result.get("id"),
+                    "contextId": result.get("contextId"),
+                }
+                raw_state = result.get("status", {}).get("state", "")
+                task["status"] = {
+                    "state": self._STATE_MAP.get(raw_state, raw_state.upper())
+                }
+                clean_artifacts = []
+                for artifact in result.get("artifacts", []):
+                    clean_parts = [
+                        {k: v for k, v in part.items() if k != "kind"}
+                        for part in artifact.get("parts", [])
+                    ]
+                    clean_artifact = {k: v for k, v in artifact.items() if k != "parts"}
+                    clean_artifact["parts"] = clean_parts
+                    clean_artifacts.append(clean_artifact)
+                task["artifacts"] = clean_artifacts
+                resp_parsed["result"] = {"task": task}
+                logger.info(
+                    "response_reshaped task_id=%s state=%s",
+                    task.get("id"), task["status"]["state"],
+                )
+
+            resp_body = json.dumps(resp_parsed, ensure_ascii=False).encode("utf-8")
+        except Exception:
+            pass
+
+        headers = dict(response.headers)
+        headers["content-length"] = str(len(resp_body))
+        return Response(
+            content=resp_body,
+            status_code=response.status_code,
+            headers=headers,
+            media_type=response.media_type,
+        )
+
 from typing import Any
 from pydantic import Field
 
@@ -245,6 +381,7 @@ a2a_app = to_a2a(
 )
 a2a_app.add_middleware(ApiKeyMiddleware)
 a2a_app.add_middleware(FriendlyErrorMiddleware)
+a2a_app.add_middleware(PoCompatibilityMiddleware)
 
 logger.info(
     "aivara_agent_startup log_level=%s url=%s",
