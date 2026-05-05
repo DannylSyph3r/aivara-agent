@@ -328,7 +328,7 @@ skills = [
 # ── Agent card ─────────────────────────────────────────────────────────────────
 
 agent_card = AgentCardV1(
-    name="Aivara",
+    name="AskAivara",
     description=(
         "Aivara is a clinical intelligence agent that reasons across a patient's "
         "full FHIR health record. It chains clinical data tools to answer complex "
