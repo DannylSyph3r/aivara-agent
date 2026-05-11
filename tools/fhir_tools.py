@@ -1,17 +1,3 @@
-"""
-Native ADK FHIR tools for Aivara Agent.
-
-Each tool reads fhir_url, fhir_token, and patient_id from tool_context.state —
-values written by fhir_hook.extract_fhir_context before every LLM call.
-No credentials appear in the prompt or in tool arguments.
-
-Pattern:
-  1. Call _get_fhir_context(tool_context) — returns error dict if any credential missing.
-  2. Call _fhir_get() with the correct FHIR path and params.
-  3. Return a structured dict with status="success" and the relevant fields.
-
-httpx is used synchronously — it is already a transitive dependency of google-adk.
-"""
 import base64
 import logging
 
@@ -26,15 +12,8 @@ _DALY_URL = "http://synthetichealth.github.io/synthea/disability-adjusted-life-y
 _QALY_URL = "http://synthetichealth.github.io/synthea/quality-adjusted-life-years"
 
 
-# ── Private helpers ────────────────────────────────────────────────────────────
-
 def _get_fhir_context(tool_context: ToolContext):
-    """
-    Read FHIR credentials from session state (written by fhir_hook).
-
-    Returns (fhir_url, fhir_token, patient_id) on success.
-    Returns an error dict if any credential is missing — callers return it directly.
-    """
+    """Read FHIR credentials from session state; return (fhir_url, fhir_token, patient_id) or an error dict."""
     fhir_url   = tool_context.state.get("fhir_url",   "").rstrip("/")
     fhir_token = tool_context.state.get("fhir_token", "")
     patient_id = tool_context.state.get("patient_id", "")
@@ -96,13 +75,7 @@ def _coding_display(codings: list) -> str:
 
 
 def _extract_observation_values(resource: dict) -> list[dict]:
-    """
-    Normalise the three FHIR observation value shapes into a flat list.
-
-    - component[]       → blood pressure (systolic + diastolic as separate entries)
-    - valueQuantity     → most vitals and labs
-    - valueCodeableConcept → smoking status and other coded values
-    """
+    """Normalise component[], valueQuantity, and valueCodeableConcept into a flat list."""
     if resource.get("component"):
         return [
             {
@@ -134,14 +107,8 @@ def _extract_observation_values(resource: dict) -> list[dict]:
     return [{"name": name, "value": None, "unit": None}]
 
 
-# ── Tools ──────────────────────────────────────────────────────────────────────
-
 def get_patient(tool_context: ToolContext) -> dict:
-    """
-    Fetches full demographics for the current patient including DALY and QALY
-    health burden scores. No arguments required — patient identity comes from
-    session context.
-    """
+    """Fetch full demographics for the current patient including DALY and QALY scores."""
     ctx = _get_fhir_context(tool_context)
     if isinstance(ctx, dict):
         return ctx
@@ -192,11 +159,7 @@ def get_patient(tool_context: ToolContext) -> dict:
 
 
 def get_conditions(tool_context: ToolContext) -> dict:
-    """
-    Fetches all conditions for the current patient — clinical diagnoses and
-    social determinants of health (SDOH). Both appear as Condition resources.
-    No arguments required.
-    """
+    """Fetch all conditions for the current patient — clinical diagnoses and SDOH."""
     ctx = _get_fhir_context(tool_context)
     if isinstance(ctx, dict):
         return ctx
@@ -233,16 +196,10 @@ def get_conditions(tool_context: ToolContext) -> dict:
 
 
 def get_observations(category: str = "vital-signs", tool_context: ToolContext = None) -> dict:
-    """
-    Fetches observations for the current patient, newest first. Values are
-    normalised — blood pressure returns as two separate entries (systolic/diastolic).
+    """Fetch observations for the current patient, newest first.
 
     Args:
-        category: FHIR observation category to filter by.
-                  'vital-signs'    — blood pressure, heart rate, temperature, SpO2
-                  'laboratory'     — lab results (CBC, HbA1c, metabolic panel)
-                  'social-history' — smoking status, alcohol use
-                  Defaults to 'vital-signs'.
+        category: FHIR observation category — 'vital-signs', 'laboratory', or 'social-history'.
     """
     ctx = _get_fhir_context(tool_context)
     if isinstance(ctx, dict):
@@ -289,10 +246,7 @@ def get_observations(category: str = "vital-signs", tool_context: ToolContext = 
 
 
 def get_encounters(tool_context: ToolContext) -> dict:
-    """
-    Fetches visit history for the current patient, newest first.
-    Includes encounter type, date, facility, and clinician. No arguments required.
-    """
+    """Fetch visit history for the current patient, newest first."""
     ctx = _get_fhir_context(tool_context)
     if isinstance(ctx, dict):
         return ctx
@@ -335,11 +289,7 @@ def get_encounters(tool_context: ToolContext) -> dict:
 
 
 def get_medications(tool_context: ToolContext) -> dict:
-    """
-    Fetches medication requests for the current patient with drug names resolved.
-    Drug name lives on a separate Medication resource — one extra fetch per entry.
-    Returns graceful empty result if no medications on record. No arguments required.
-    """
+    """Fetch medication requests for the current patient with drug names resolved."""
     ctx = _get_fhir_context(tool_context)
     if isinstance(ctx, dict):
         return ctx
@@ -367,7 +317,7 @@ def get_medications(tool_context: ToolContext) -> dict:
     for entry in entries:
         res = entry.get("resource", {})
 
-        # Drug name is on the Medication resource, not MedicationRequest.
+        # Drug name lives on the Medication resource, not MedicationRequest.
         med_ref  = res.get("medicationReference", {}).get("reference", "")
         med_id   = med_ref.replace("Medication/", "") if med_ref else ""
         drug_name = "Unknown"
@@ -397,11 +347,7 @@ def get_medications(tool_context: ToolContext) -> dict:
 
 
 def get_allergies(tool_context: ToolContext) -> dict:
-    """
-    Fetches known allergies for the current patient. Returns a graceful no-allergy
-    result if none recorded — expected for most patients in this workspace.
-    No arguments required.
-    """
+    """Fetch known allergies for the current patient."""
     ctx = _get_fhir_context(tool_context)
     if isinstance(ctx, dict):
         return ctx
@@ -447,12 +393,7 @@ def get_allergies(tool_context: ToolContext) -> dict:
 
 
 def get_documents(tool_context: ToolContext) -> dict:
-    """
-    Lists all clinical notes for the current patient with metadata.
-    Returns status (current/superseded), date, author, and document ID.
-    Use document ID with get_document_content to retrieve note text.
-    No arguments required.
-    """
+    """List all clinical notes for the current patient with metadata. Use document ID with get_document_content to retrieve note text."""
     ctx = _get_fhir_context(tool_context)
     if isinstance(ctx, dict):
         return ctx
@@ -493,9 +434,7 @@ def get_documents(tool_context: ToolContext) -> dict:
 
 
 def get_document_content(document_id: str, tool_context: ToolContext) -> dict:
-    """
-    Fetches and decodes the full text of a specific clinical note.
-    Content is inline base64 on the DocumentReference — no Binary fetch required.
+    """Fetch and decode the full text of a clinical note by DocumentReference ID.
 
     Args:
         document_id: DocumentReference ID obtained from get_documents.
@@ -531,10 +470,7 @@ def get_document_content(document_id: str, tool_context: ToolContext) -> dict:
 
 
 def get_procedures(tool_context: ToolContext) -> dict:
-    """
-    Fetches procedures performed for the current patient. Includes procedure name,
-    status, date, and the condition that triggered it. No arguments required.
-    """
+    """Fetch procedures performed for the current patient."""
     ctx = _get_fhir_context(tool_context)
     if isinstance(ctx, dict):
         return ctx

@@ -1,16 +1,3 @@
-"""
-ADK Agent definition.
-
-Patient ID is injected into the LlmRequest system instruction at runtime
-by extract_fhir_context (before_model_callback) — not via template placeholder.
-This avoids ADK raising KeyError when patient_id is not yet in session state
-during preprocessing, which runs before the callback.
-
-before_model_callback=extract_fhir_context ensures:
-  - Patient ID is extracted from A2A metadata and stored in session state
-  - Patient context is prepended to the system instruction in the LlmRequest
-  - If patient ID is missing, LlmResponse is returned directly — LLM never runs
-"""
 import logging
 
 from google.adk.agents import Agent

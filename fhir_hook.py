@@ -1,31 +1,3 @@
-"""
-FHIR context hook — ADK before_model_callback.
-
-Runs before every LLM call. Extracts FHIR credentials from A2A message metadata
-and writes them into session state so they are available to tools at call time
-without ever appearing in the prompt.
-
-Critical guardrail: if patientId is absent or empty after extraction, this
-function returns LlmResponse directly. The LLM never runs. This is code-level
-enforcement — an instruction-based guard can be ignored by the model; this cannot.
-
-Patient ID injection: when patientId is present, it is prepended to the system
-instruction in the LlmRequest directly. The instruction template cannot use a
-{patient_id} placeholder because ADK renders template variables during preprocessing
-— before this callback runs — which raises KeyError when patient_id is not yet in
-session state. Injecting via llm_request.config.system_instruction is the correct
-ADK-documented pattern for dynamic instruction modification at callback time.
-
-Metadata key convention (must match PO_FHIR_EXTENSION_URI in config.py):
-    "https://app.promptopinion.ai/schemas/a2a/v1/fhir-context": {
-        "fhirUrl":   "https://...",
-        "fhirToken": "<bearer-token>",
-        "patientId": "<uuid>"
-    }
-
-Set LOG_HOOK_RAW_OBJECTS=true in .env to dump raw ADK objects during integration
-testing. Set to false before production.
-"""
 import json
 import logging
 import os
@@ -43,19 +15,11 @@ logger = logging.getLogger(__name__)
 LOG_HOOK_RAW_OBJECTS: bool = os.getenv("LOG_HOOK_RAW_OBJECTS", "false").lower() == "true"
 
 
-# ── Private helpers ────────────────────────────────────────────────────────────
-
 def _safe_correlation_ids(
     callback_context: CallbackContext,
     llm_request: LlmRequest,
 ) -> dict[str, str | None]:
-    """Extract stable correlation identifiers from ADK context objects.
-
-    ADK does not expose A2A task_id / context_id / message_id on its callback
-    objects — those live at the A2A layer above. invocation_id is the correct
-    ADK-native identifier: stable across all before_model_callback calls within
-    a single user message turn, and unique per invocation.
-    """
+    """Extract invocation_id and agent_name from ADK context — the stable per-turn identifiers."""
     return {
         "invocation_id": getattr(callback_context, "invocation_id", None),
         "agent_name":    getattr(callback_context, "agent_name",    None),
@@ -66,15 +30,7 @@ def _extract_metadata(
     callback_context: CallbackContext,
     llm_request: LlmRequest,
 ) -> dict:
-    """
-    Walk all known ADK metadata locations in priority order.
-
-    ADK surfaces A2A metadata in different locations depending on transport path:
-    - callback_context.metadata — direct metadata
-    - callback_context.run_config.custom_metadata["a2a_metadata"] — where ADK
-      stores bridged params.metadata from A2A requests
-    - llm_request.metadata — fallback
-    """
+    """Walk all known ADK metadata locations in priority order and return the first populated dict."""
     run_config = getattr(callback_context, "run_config", None)
     custom_metadata = getattr(run_config, "custom_metadata", None) if run_config else None
     a2a_metadata = (
@@ -95,12 +51,7 @@ def _extract_metadata(
 
 
 def _coerce_fhir_data(value) -> dict | None:
-    """
-    Accept either a dict or a JSON string; return a dict or None.
-
-    A malformed value must not crash the hook — return None and let the
-    caller log a warning and proceed to the empty-patient-ID guardrail.
-    """
+    """Accept a dict or JSON string and return a dict, or None on failure."""
     if isinstance(value, dict):
         return value
     if isinstance(value, str):
@@ -113,13 +64,7 @@ def _coerce_fhir_data(value) -> dict | None:
 
 
 def _inject_patient_context(llm_request: LlmRequest, patient_id: str) -> None:
-    """
-    Prepend patient ID context to the system instruction in the LlmRequest.
-
-    Called after patient_id is confirmed non-empty. Always outputs a plain
-    string to system_instruction regardless of the incoming type (str, Content,
-    or None), which ADK handles correctly.
-    """
+    """Prepend the patient ID header to the system instruction in the LlmRequest."""
     if llm_request.config is None:
         logger.warning("hook_inject_skipped llm_request.config is None")
         return
@@ -146,24 +91,11 @@ def _inject_patient_context(llm_request: LlmRequest, patient_id: str) -> None:
     logger.info("hook_patient_context_injected patient_id=%s", patient_id)
 
 
-# ── Public callback ────────────────────────────────────────────────────────────
-
 def extract_fhir_context(
     callback_context: CallbackContext,
     llm_request: LlmRequest,
 ) -> Optional[LlmResponse]:
-    """
-    ADK before_model_callback.
-
-    Extracts FHIR credentials from A2A message metadata into session state.
-    All three values (fhir_url, fhir_token, patient_id) are stored even though
-    the MCP server currently uses anonymous FHIR access — this keeps state ready
-    if authentication requirements change.
-
-    Returns:
-        None         — patient ID resolved; allow normal LLM execution.
-        LlmResponse  — patient ID missing; short-circuit with user-friendly message.
-    """
+    """ADK before_model_callback — extracts FHIR credentials into session state and guards against missing patient ID."""
     correlation = _safe_correlation_ids(callback_context, llm_request)
 
     if LOG_HOOK_RAW_OBJECTS:

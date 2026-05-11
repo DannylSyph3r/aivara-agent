@@ -1,10 +1,3 @@
-"""
-Logging utilities shared across all modules.
-
-configure_logging() — call once at startup in app.py.
-token_fingerprint() — safe summary of a bearer token for log lines; never logs the value.
-safe_pretty_json()  — JSON serialisation that never raises.
-"""
 import hashlib
 import json
 import logging

@@ -1,24 +1,9 @@
-"""
-A2A application entry point.
-
-Import order is deliberate:
-  1. load_dotenv() — must run before any local module reads os.getenv()
-  2. configure_logging() — set up logging before anything emits log lines
-  3. validate_config() — fail fast at startup if required keys are missing
-  4. Everything else
-
-The agent card is served publicly at GET /.well-known/agent-card.json.
-All other endpoints require X-API-Key, enforced by ApiKeyMiddleware.
-"""
 import json
 import logging
 import os
 
 from dotenv import load_dotenv
 
-# Step 1 — environment must be loaded before any local import reads os.getenv().
-# config.py also calls load_dotenv() defensively; calling it here first ensures
-# LOG_LEVEL is available for configure_logging() before config is imported.
 load_dotenv()
 
 from logging_utils import configure_logging
@@ -29,10 +14,7 @@ from config import (
     validate_config,
 )
 
-# Step 2 — logging before anything else emits lines.
 configure_logging(os.getenv("LOG_LEVEL", "INFO"))
-
-# Step 3 — fail fast if the environment is incomplete.
 validate_config()
 
 logger = logging.getLogger(__name__)
@@ -51,18 +33,12 @@ from starlette.responses import Response
 from agent import root_agent
 from middleware import ApiKeyMiddleware
 
-# ── Error middleware ───────────────────────────────────────────────────────────
+from typing import Any
+from pydantic import Field
+
 
 class FriendlyErrorMiddleware(BaseHTTPMiddleware):
-    """
-    Intercepts A2A JSON responses containing Gemini 503 errors and rewrites
-    the error text with a user-friendly message before it reaches the caller.
-
-    Transparent on any failure — if the response body cannot be parsed as JSON
-    the original body is returned unchanged. Never raises.
-
-    Only active for POST requests; GET requests (agent card) pass straight through.
-    """
+    """Rewrites Gemini 503 error text in A2A JSON responses with a user-friendly message."""
 
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
@@ -88,8 +64,7 @@ class FriendlyErrorMiddleware(BaseHTTPMiddleware):
                     payload["result"] = result
                     break
 
-            # Strip stale Content-Length — Starlette sets the correct value
-            # from the actual content we return.
+            # Strip stale Content-Length so Starlette sets the correct value.
             headers = {
                 k: v for k, v in response.headers.items()
                 if k.lower() != "content-length"
@@ -103,32 +78,15 @@ class FriendlyErrorMiddleware(BaseHTTPMiddleware):
             )
 
         except Exception:
-            # Body is not JSON or an unexpected error occurred.
-            # Return whatever we buffered so nothing is swallowed.
             return Response(
                 content=body,
                 status_code=response.status_code,
                 headers=dict(response.headers),
             )
 
-# ── PO compatibility middleware ────────────────────────────────────────────────
 
 class PoCompatibilityMiddleware(BaseHTTPMiddleware):
-    """
-    Bridges remaining incompatibilities between PO's A2A v1 client and the
-    installed a2a-sdk 0.3.x stack.
-
-    Note: FHIR metadata bridging (params.message.metadata → params.metadata)
-    is already handled upstream by ApiKeyMiddleware. Not duplicated here.
-
-    Inbound transforms:
-      1. Method rewriting   — SendMessage → message/send (confirmed via Postman)
-      2. Role normalisation — ROLE_USER → user, ROLE_AGENT → agent
-
-    Outbound transforms:
-      3. Response reshaping — wraps result in {"task": {...}} with proto enum
-         states and strips "kind" fields from artifact parts (PO A2A v1 format)
-    """
+    """Bridges PO A2A v1 client incompatibilities with the a2a-sdk 0.3.x stack."""
 
     _METHOD_ALIASES: dict[str, str] = {
         "SendMessage":          "message/send",
@@ -162,7 +120,7 @@ class PoCompatibilityMiddleware(BaseHTTPMiddleware):
         except json.JSONDecodeError:
             parsed = {}
 
-        # 1. Method rewriting
+        # Method rewriting
         if isinstance(parsed, dict) and parsed.get("method") in self._METHOD_ALIASES:
             original = parsed["method"]
             parsed["method"] = self._METHOD_ALIASES[original]
@@ -172,7 +130,7 @@ class PoCompatibilityMiddleware(BaseHTTPMiddleware):
                 original, parsed["method"],
             )
 
-        # 2. Role normalisation
+        # Role normalisation
         def _fix_roles(node):
             if isinstance(node, dict):
                 if "role" in node and node["role"] in self._ROLE_ALIASES:
@@ -196,7 +154,7 @@ class PoCompatibilityMiddleware(BaseHTTPMiddleware):
 
         response = await call_next(request)
 
-        # 3. Response reshaping — only applies to JSON responses
+        # Response reshaping — only for JSON responses
         content_type = response.headers.get("content-type", "")
         if "application/json" not in content_type:
             return response
@@ -247,28 +205,12 @@ class PoCompatibilityMiddleware(BaseHTTPMiddleware):
             media_type=response.media_type,
         )
 
-from typing import Any
-from pydantic import Field
-
-# ── AgentCardV1 ────────────────────────────────────────────────────────────────
 
 class AgentCardV1(AgentCard):
-    """
-    AgentCard subclass that patches two fields missing/changed in A2A v1.
-
-    1. supportedInterfaces — not defined in installed a2a-sdk; added here so
-       it is included in the serialised JSON.
-    2. securitySchemes — parent types this as dict[str, SecurityScheme] which
-       forces the OLD flat format (type/name/in). PO v1 expects the NEW nested
-       format (apiKeySecurityScheme/...). Overriding to dict[str, Any] lets the
-       v1-format dict pass through unmodified.
-
-    Both overrides can be removed once a2a-sdk ships native A2A v1 support.
-    """
+    """AgentCard subclass that adds supportedInterfaces and relaxes securitySchemes typing for A2A v1."""
     supportedInterfaces: list[dict[str, Any]] = Field(default_factory=list)
     securitySchemes: dict[str, Any] | None = None  # override parent's typed field
 
-# ── Agent skills ───────────────────────────────────────────────────────────────
 
 skills = [
     AgentSkill(
@@ -325,8 +267,6 @@ skills = [
     ),
 ]
 
-# ── Agent card ─────────────────────────────────────────────────────────────────
-
 agent_card = AgentCardV1(
     name="AskAivara",
     description=(
@@ -370,11 +310,7 @@ agent_card = AgentCardV1(
     security=[{"apiKey": []}],
 )
 
-# ── A2A application ────────────────────────────────────────────────────────────
-# to_a2a() does not accept api_key — ApiKeyMiddleware is attached manually.
-# Starlette builds the middleware stack lazily on the first request, so
-# add_middleware() called here (at import time) is safe before uvicorn starts.
-
+# to_a2a() does not accept api_key — middleware is attached manually below.
 a2a_app = to_a2a(
     agent=root_agent,
     agent_card=agent_card,
